@@ -101,6 +101,8 @@ echo `date` "Purging nova.instance_actions_events of deleted instance data"
 
 TABLE=instance_actions_events
 SHADOW_TABLE="shadow_${TABLE}"
+DELETED='deleted!=0 AND deleted_at < DATE_SUB(NOW(), INTERVAL 5 YEAR)'
+
 pt-archiver ${DRY_RUN} ${NOSAI} --statistics --sleep-coef 0.75 \
     --progress 100 --commit-each --limit 10 \
     --source D=${DATABASE},t=${TABLE}${HOSTPT}${USERPT}${PASSPT} \
@@ -126,18 +128,20 @@ for TABLE in ${FKTABLES}; do
         --source D=${DATABASE},t=${TABLE}${HOSTPT}${USERPT}${PASSPT} \
         --no-check-charset  \
         --dest D=${DATABASE},t=${SHADOW_TABLE}${HOSTPT}${USERPT}${PASSPT} \
-        --where 'EXISTS(SELECT * FROM instances WHERE deleted!=0 '\
+        --where 'EXISTS(SELECT * FROM instances WHERE '"${DELETED}"' '\
 'AND uuid='${TABLE}'.instance_uuid)'
 done
 
-for TABLE in ${TABLES}; do
+for TABLE in 'instances'; do
     SHADOW_TABLE="shadow_${TABLE}"
 
     ACTIVE_RECORDS=`mysql ${HOST} ${USER} ${PASS} \
         -B -e "select count(id) from ${DATABASE}.${TABLE} where deleted=0" \
         | tail -1`
     DELETED_RECORDS=`mysql ${HOST} ${USER} ${PASS} -B -e \
-    "select count(id) from ${DATABASE}.${TABLE} where deleted!=0" | tail -1`
+    "select count(id) from ${DATABASE}.${TABLE} where ${DELETED}" | tail -1`
+    TOTAL_RECORDS=`mysql ${HOST} ${USER} ${PASS} -B -e \
+	"select count(id) from ${DATABASE}.${TABLE}" | tail -1`
 
     LOCAL_ABORTS=`mysql ${HOST} ${USER} ${PASS} -B -e \
     "SHOW STATUS LIKE 'wsrep_%'" | \
@@ -145,8 +149,8 @@ for TABLE in ${TABLES}; do
 
     echo
     echo
-    echo `date` "Archiving ${DELETED_RECORDS} records to ${SHADOW_TABLE} from \
-        ${TABLE}, leaving ${ACTIVE_RECORDS}"
+    echo `date` "Archiving ${DELETED_RECORDS} out of ${TOTAL_RECORDS} records " \
+                "to ${SHADOW_TABLE} from ${TABLE}, with ${ACTIVE_RECORDS} active"
     echo `date` "LOCAL_ABORTS before"
     echo ${LOCAL_ABORTS}
 
@@ -155,7 +159,7 @@ for TABLE in ${TABLES}; do
         --source D=${DATABASE},t=${TABLE}${HOSTPT}${USERPT}${PASSPT} \
         --dest D=${DATABASE},t=${SHADOW_TABLE}${HOSTPT}${USERPT}${PASSPT} \
         --ignore --no-check-charset --sleep-coef 0.75 \
-        --where "deleted!=0"
+        --where "${DELETED}"
 
     echo `date` "Finished archiving ${DELETED_RECORDS} to ${SHADOW_TABLE} from\
         ${TABLE}"
